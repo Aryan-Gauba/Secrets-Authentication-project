@@ -7,11 +7,19 @@ import { Strategy } from "passport-local";
 import GoogleStrategy from "passport-google-oauth2";
 import session from "express-session";
 import env from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
+
 
 const app = express();
-const port = 3000;
+const port = process.env.PG_PORT || 3000;
 const saltRounds = 10;
 env.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+app.set("views", path.join(__dirname, "views"));
+app.set("view engine", "ejs");
 
 app.use(
   session({
@@ -26,14 +34,17 @@ app.use(express.static("public"));
 app.use(passport.initialize());
 app.use(passport.session());
 
-const db = new pg.Client({
-  user: process.env.PG_USER,
-  host: process.env.PG_HOST,
-  database: process.env.PG_DATABASE,
-  password: process.env.PG_PASSWORD,
-  port: process.env.PG_PORT,
+const isProduction = process.env.NODE_ENV === "production";
+
+const db = new pg.Pool({
+  // This uses the Vercel URL in production, or your .env variables locally
+  connectionString: isProduction 
+    ? process.env.POSTGRES_URL 
+    : `postgres://${process.env.PG_USER}:${process.env.PG_PASSWORD}@${process.env.PG_HOST}:${process.env.PG_PORT}/${process.env.PG_DATABASE}`,
+  // SSL is required for Vercel/Neon but should be off for local dev
+  ssl: isProduction ? { rejectUnauthorized: false } : false
 });
-db.connect();
+
 
 app.get("/", (req, res) => {
   res.render("home.ejs");
@@ -199,7 +210,7 @@ passport.use(
     {
       clientID: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      callbackURL: "http://localhost:3000/auth/google/secrets",
+      callbackURL: process.env.GOOGLE_CALLBACK_URL || "http://localhost:3000/auth/google/secrets",
       userProfileURL: "https://www.googleapis.com/oauth2/v3/userinfo",
     },
     async (accessToken, refreshToken, profile, cb) => {
@@ -209,7 +220,7 @@ passport.use(
         ]);
         if (result.rows.length === 0) {
           const newUser = await db.query(
-            "INSERT INTO users (email, password) VALUES ($1, $2)",
+            "INSERT INTO users (email, password) VALUES ($1, $2) RETURNING *",
             [profile.email, "google"]
           );
           return cb(null, newUser.rows[0]);
